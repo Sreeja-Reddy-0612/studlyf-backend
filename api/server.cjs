@@ -8,6 +8,7 @@ const app = express();
 
 // Middleware
 const allowedOrigins = [
+  'http://localhost:8000',
   'https://studlyf.in',
 ];
 
