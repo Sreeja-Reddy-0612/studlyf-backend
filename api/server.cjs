@@ -8,7 +8,7 @@ const app = express();
 
 // Middleware
 const allowedOrigins = [
-  'http://localhost:8000',
+  'http://localhost:8081',
   'https://studlyf.in',
 ];
 
@@ -79,7 +79,7 @@ userSchema.pre('save', function (next) {
   next();
 });
 
-const User = mongoose.models.User || mongoose.model('User', userSchema);
+const User = mongoose.models.Users || mongoose.model('User', userSchema);
 
 // Connection Schema
 const connectionSchema = new mongoose.Schema({
