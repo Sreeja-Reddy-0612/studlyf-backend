@@ -1,3 +1,20 @@
 .env
 serviceAccountKey.json
 node_modules
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Environment
+.env
+
+# OS Files
+.DS_Store
+Thumbs.db

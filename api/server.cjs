@@ -375,8 +375,8 @@ app.get('/api/health', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log( 'Server running in the port ${PORT}');
-  console.log( 'CORS enabled for origins: ${allowedOrigins.join(', ')}');
+  console.log( `Server running in the port ${PORT}`);
+  console.log( `CORS enabled for origins: ${allowedOrigins.join(', ')}`);
 });
 
 module.exports = app;

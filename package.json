@@ -4,7 +4,7 @@
   "main": "api.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "node server.cjs"
+     "dev": "node api/server.cjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
