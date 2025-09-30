@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Free Certification Courses</title>
+</head>
+<body>
+    <h2>Explore Free Certification Courses from Top Platforms</h2>
+    <ul id="course-list" style="list-style:none; padding:0;"></ul>
+    <script>
+        fetch("http://localhost:5001/certification-courses")
+            .then(resp => resp.json())
+            .then(data => {
+                const ul = document.getElementById("course-list");
+                data.courses.forEach(course => {
+                    const li = document.createElement("li");
+                    li.style.border = "1px solid #ddd";
+                    li.style.marginBottom = "15px";
+                    li.style.padding = "10px";
+                    li.style.display = "flex";
+                    li.style.gap = "10px";
+                    li.style.alignItems = "center";
+
+                    const imgHTML = course.image ? 
+                        `<img src="${course.image}" alt="Course image" style="width:150px; height:auto; border-radius:5px; flex-shrink:0;">` : "";
+
+                    li.innerHTML = `${imgHTML}
+                        <div>
+                            <b style="font-size:18px;">${course.name || "Untitled"}</b><br>
+                            <small style="color: gray;">${course.provider}</small><br>
+                            <span>${course.description}</span><br>
+                            <small><b>Level:</b> ${course.level || "N/A"} | <b>Duration:</b> ${course.duration || "N/A"}</small><br>
+                            <a href="${course.url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; color:blue;">Go to Course</a>
+                        </div>`;
+                    ul.appendChild(li);
+                });
+                if (!data.courses.length) {
+                    ul.innerHTML = "<li>No courses found. Try again.</li>";
+                }
+            })
+            .catch(err => {
+                document.getElementById("course-list").innerHTML = "<li>Failed to fetch courses.</li>";
+            });
+    </script>
+</body>
+</html>

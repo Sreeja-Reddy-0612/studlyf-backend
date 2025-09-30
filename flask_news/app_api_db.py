@@ -1,45 +1,91 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv
 import sqlite3, os, requests
+from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
-
 from apscheduler.schedulers.background import BackgroundScheduler
-from func import (
-    add_project, get_projects,
-    add_event, get_events,
-    fetch_courses_from_url, URLS  # <-- Add these imports
-)
+
+# ----------------- SETUP -----------------
 load_dotenv()
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:8080"])  # Adjust your frontend URL here
+CORS(app, origins=["http://localhost:8080"])  # Adjust to your frontend
 
+DB_FILE = "database.db"
+
+# API Keys
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 BLOGS_API_KEY = os.getenv("BLOGS_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# ----------------- COURSES, PROJECTS, CERTIFICATIONS SCRAPING ROUTES -----------------
-@app.route('/free-courses')
-def free_courses():
-    courses = fetch_courses_from_url(URLS["courses"], "Coursera")
-    return jsonify({"courses": courses[:20]})
+# ----------------- DATABASE -----------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
-@app.route('/projects')
-def guided_projects():
-    projects = fetch_courses_from_url(URLS["projects"], "Coursera")
-    return jsonify({"projects": projects[:20]})
+    # Projects Table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            tech_stack TEXT NOT NULL,
+            roles TEXT NOT NULL,
+            duration TEXT NOT NULL,
+            last_date TEXT NOT NULL,
+            links TEXT
+        )
+    """)
 
-@app.route('/certifications')
-def certifications():
-    certificates = fetch_courses_from_url(URLS["certificates"], "Coursera")
-    return jsonify({"certificates": certificates[:20]})
+    # Events Table (schema matches frontend fields)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        type TEXT NOT NULL,
+        location TEXT NOT NULL,
+        event_date TEXT NOT NULL,
+        time TEXT NOT NULL,
+        attendees INTEGER DEFAULT 0,
+        registration_link TEXT,
+        registration_end_date TEXT NOT NULL
+    )
+""")
 
-# Projects routes
-@app.route("/project-hunt", methods=["GET", "POST"])
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ----------------- PROJECTS -----------------
+@app.route("/projects", methods=["GET", "POST"])
 def projects():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
     if request.method == "POST":
         data = request.json
-        new_project = add_project(data)
+        c.execute("""
+            INSERT INTO projects (title, description, tech_stack, roles, duration, last_date, links)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data.get("title"),
+            data.get("description"),
+            data.get("tech_stack"),
+            data.get("roles"),
+            data.get("duration"),
+            data.get("last_date"),
+            data.get("links"),
+        ))
+        conn.commit()
+        new_id = c.lastrowid
+
+        # Fetch newly inserted project
+        c.execute("SELECT * FROM projects WHERE id=?", (new_id,))
+        new_project = c.fetchone()
+        conn.close()
+
         return jsonify({
             "id": new_project[0],
             "title": new_project[1],
@@ -50,29 +96,61 @@ def projects():
             "last_date": new_project[6],
             "links": new_project[7]
         }), 201
-    else:
-        projects = get_projects()
+
+    else:  # GET
+        c.execute("SELECT * FROM projects ORDER BY id DESC")
+        projects = c.fetchall()
+        conn.close()
+
         return jsonify({
             "projects": [
                 {
-                    "id": p[0],
-                    "title": p[1],
-                    "description": p[2],
-                    "tech_stack": p[3],
-                    "roles": p[4],
-                    "duration": p[5],
-                    "last_date": p[6],
-                    "links": p[7]
-                } for p in projects
+                    "id": row[0],
+                    "title": row[1],
+                    "description": row[2],
+                    "tech_stack": row[3],
+                    "roles": row[4],
+                    "duration": row[5],
+                    "last_date": row[6],
+                    "links": row[7]
+                } for row in projects
             ]
         })
 
-# Events routes
+# ----------------- EVENTS -----------------
 @app.route("/events", methods=["GET", "POST"])
 def events():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
     if request.method == "POST":
         data = request.json
-        new_event = add_event(data)
+        # Accept both camelCase and snake_case from frontend for compatibility
+        event_date = data.get("event_date") or data.get("date")
+        registration_end_date = data.get("registration_end_date") or data.get("lastRegistrationDate")
+        registration_link = data.get("registration_link") or data.get("registrationLink")
+        c.execute("""
+            INSERT INTO events (title, description, type, location, event_date, time, attendees, registration_link, registration_end_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data.get("title"),
+            data.get("description"),
+            data.get("type"),
+            data.get("location"),
+            event_date,
+            data.get("time"),
+            data.get("attendees", 0),
+            registration_link,
+            registration_end_date,
+        ))
+        conn.commit()
+        new_id = c.lastrowid
+
+        # Fetch newly inserted event
+        c.execute("SELECT * FROM events WHERE id=?", (new_id,))
+        new_event = c.fetchone()
+        conn.close()
+
         return jsonify({
             "id": new_event[0],
             "title": new_event[1],
@@ -83,27 +161,33 @@ def events():
             "time": new_event[6],
             "attendees": new_event[7],
             "registration_link": new_event[8],
-            "registration_end_date": new_event[9]
+            "registration_end_date": new_event[9],
         }), 201
-    else:
-        events = get_events()
+
+    else:  # GET
+        c.execute("SELECT * FROM events ORDER BY id DESC")
+        events = c.fetchall()
+        conn.close()
+
         return jsonify({
             "events": [
                 {
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "type": e[3],
-                    "location": e[4],
-                    "event_date": e[5],
-                    "time": e[6],
-                    "attendees": e[7],
-                    "registration_link": e[8],
-                    "registration_end_date": e[9]
-                } for e in events
+                    "id": row[0],
+                    "title": row[1],
+                    "description": row[2],
+                    "type": row[3],
+                    "location": row[4],
+                    "event_date": row[5],
+                    "time": row[6],
+                    "attendees": row[7],
+                    "registration_link": row[8],
+                    "registration_end_date": row[9],
+                } for row in events
             ]
         })
 
+
+# ----------------- CACHES -----------------
 cached_news = []
 cached_blogs = []
 cached_shorts = []
