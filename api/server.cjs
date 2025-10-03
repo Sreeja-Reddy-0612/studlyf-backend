@@ -2,13 +2,20 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
 const authenticate = require('../middleware/authenticate');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const Message = require('../models/Message');
 
 const app = express();
 
 // Middleware
 const allowedOrigins = [
   'http://localhost:8080',
+  'http://localhost:5173',
   'https://studlyf.in',
   'https://www.studlyf.in',
 ];
@@ -29,8 +36,8 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   optionsSuccessStatus: 200
 }));
 
@@ -38,6 +45,23 @@ app.use(express.json({ limit: '20kb' }));
 
 // Handle preflight requests
 app.options('*', cors());
+
+// simple disk storage for images
+const uploadDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const certDir = path.join(uploadDir, 'certificates');
+if (!fs.existsSync(certDir)) fs.mkdirSync(certDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '');
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    cb(null, name);
+  }
+});
+const upload = multer({ storage });
+// serve uploaded files
+app.use('/uploads', express.static(uploadDir));
 
 // MongoDB Connection
 const mongoUri = process.env.MONGO_URI;
@@ -71,6 +95,12 @@ const userSchema = new mongoose.Schema({
   resumeFiles: [String],
   projectFiles: [String],
   certificationFiles: [String],
+  projects: [{
+    githubUrl: String,
+    liveUrl: String,
+    youtubeUrl: String,
+    description: String,
+  }],
   isOnline: Boolean,
   completedProfile: Boolean,
   createdAt: Date,
@@ -97,15 +127,8 @@ const connectionSchema = new mongoose.Schema({
 
 const Connection = mongoose.models.Connection || mongoose.model('Connection', connectionSchema);
 
-// Message Schema
-const messageSchema = new mongoose.Schema({
-  from: { type: String, required: true },
-  to: { type: String, required: true },
-  text: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now, expires: 86400 }
-}, { collection: 'messages' });
-
-const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
+// Use centralized Message model (with type/read/media fields)
+const MessageModel = Message;
 
 // Connection Request Schema
 const connectionRequestSchema = new mongoose.Schema({
@@ -301,8 +324,97 @@ app.post('/api/messages/send', authenticate, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized access' });
     }
     
-    const msg = await Message.create({ from, to, text });
+    const msg = await MessageModel.create({ from, to, text, type: 'text', read: false });
+    // emit socket events to recipient and sender
+    try {
+      if (io) {
+        io.to(to).emit('message:new', {
+          _id: String(msg._id),
+          from,
+          to,
+          text,
+          read: false,
+          createdAt: msg.createdAt,
+        });
+        io.to(from).emit('message:sent', {
+          _id: String(msg._id),
+          from,
+          to,
+          text,
+          read: false,
+          createdAt: msg.createdAt,
+        });
+      }
+    } catch (e) {
+      // best-effort emit
+    }
     res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send an image message (protected)
+app.post('/api/messages/send-image', authenticate, upload.single('image'), async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'Missing from or to' });
+    if (req.user.uid !== from) return res.status(403).json({ error: 'Unauthorized access' });
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    const base = `${req.protocol}://${req.get('host')}`;
+    const mediaUrl = `${base}/uploads/${req.file.filename}`;
+    const msg = await MessageModel.create({ from, to, type: 'image', mediaUrl, mediaType: req.file.mimetype, read: false });
+    try {
+      if (io) {
+        io.to(to).emit('message:new', { _id: String(msg._id), from, to, type: 'image', mediaUrl, mediaType: req.file.mimetype, read: false, createdAt: msg.createdAt });
+        io.to(from).emit('message:sent', { _id: String(msg._id), from, to, type: 'image', mediaUrl, mediaType: req.file.mimetype, read: false, createdAt: msg.createdAt });
+      }
+    } catch (e) {}
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Forward message (protected)
+app.post('/api/messages/forward', authenticate, async (req, res) => {
+  try {
+    const { from, to, messageId } = req.body;
+    if (!from || !to || !messageId) return res.status(400).json({ error: 'Missing from, to, or messageId' });
+    if (req.user.uid !== from) return res.status(403).json({ error: 'Unauthorized access' });
+    const original = await MessageModel.findById(messageId);
+    if (!original) return res.status(404).json({ error: 'Original message not found' });
+    const payload = {
+      from,
+      to,
+      type: original.type,
+      text: original.type === 'text' ? original.text : undefined,
+      mediaUrl: original.type === 'image' ? original.mediaUrl : undefined,
+      mediaType: original.type === 'image' ? original.mediaType : undefined,
+      forwardOf: String(original._id),
+      read: false,
+    };
+    const msg = await MessageModel.create(payload);
+    try {
+      if (io) {
+        io.to(to).emit('message:new', { ...payload, _id: String(msg._id), createdAt: msg.createdAt });
+        io.to(from).emit('message:sent', { ...payload, _id: String(msg._id), createdAt: msg.createdAt });
+      }
+    } catch (e) {}
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload a certificate image for profile (protected)
+app.post('/api/profile/certificates/upload', authenticate, upload.single('image'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    const base = `${req.protocol}://${req.get('host')}`;
+    const mediaUrl = `${base}/uploads/${req.file.filename}`;
+    res.json({ url: mediaUrl, name: req.file.originalname || 'certificate' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -318,13 +430,50 @@ app.get('/api/messages/:uid1/:uid2', authenticate, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized access' });
     }
     
-    const msgs = await Message.find({
+    const msgs = await MessageModel.find({
       $or: [
         { from: uid1, to: uid2 },
         { from: uid2, to: uid1 }
       ]
     }).sort({ createdAt: 1 });
     res.json(msgs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get unread counts grouped by peer for current user (protected)
+app.get('/api/messages/unread-counts/:uid', authenticate, async (req, res) => {
+  try {
+    const { uid } = req.params;
+    if (req.user.uid !== uid) return res.status(403).json({ error: 'Unauthorized access' });
+    const pipeline = [
+      { $match: { to: uid, read: false } },
+      { $group: { _id: '$from', count: { $sum: 1 } } }
+    ];
+    const agg = await MessageModel.aggregate(pipeline);
+    const counts = {};
+    agg.forEach(doc => { counts[doc._id] = doc.count; });
+    res.json(counts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark messages from peer as read for current user (protected)
+app.patch('/api/messages/:peerId/read', authenticate, async (req, res) => {
+  try {
+    const peerId = req.params.peerId;
+    const currentUid = req.user.uid;
+    const result = await MessageModel.updateMany({ from: peerId, to: currentUid, read: false }, { $set: { read: true } });
+    // notify peer and current user
+    try {
+      if (io) {
+        io.to(peerId).emit('message:read', { by: currentUid, peer: peerId });
+        io.to(currentUid).emit('message:read', { by: currentUid, peer: peerId });
+      }
+    } catch (e) {}
+    res.json({ modified: result.modifiedCount || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -372,11 +521,29 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log( `Server running in the port ${PORT}`);
-  console.log( `CORS enabled for origins: ${allowedOrigins.join(', ')}`);
-});
+// Socket.IO setup (only when running as a standalone server)
+let io = null;
+let server = null;
+if (!process.env.VERCEL) {
+  server = http.createServer(app);
+  io = new Server(server, {
+    cors: { origin: allowedOrigins, credentials: true }
+  });
+
+  // Simple auth: client provides uid via query; join personal room
+  io.on('connection', (socket) => {
+    const uid = socket.handshake.auth?.uid || socket.handshake.query?.uid;
+    if (uid) {
+      socket.join(String(uid));
+    }
+    socket.on('disconnect', () => {});
+  });
+
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`Server running in the port ${PORT}`);
+    console.log(`CORS enabled for origins: ${allowedOrigins.join(', ')}`);
+  });
+}
 
 module.exports = app;

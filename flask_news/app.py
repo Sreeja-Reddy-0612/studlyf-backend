@@ -1,8 +1,12 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
-import sqlite3, os, requests
+import sqlite3, os, requests, json, base64
 from datetime import datetime, timezone, timedelta
+from pymongo import MongoClient
+import firebase_admin
+from firebase_admin import credentials, auth
+from functools import wraps
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from func import (
@@ -10,13 +14,516 @@ from func import (
     add_event, get_events,
     fetch_courses_from_url, URLS  # <-- Add these imports
 )
-load_dotenv()
-app = Flask(__name__)
-CORS(app, origins=["http://localhost:8080"])  # Adjust your frontend URL here
 
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:8080", "https://studlyf.in", "https://www.studlyf.in"])
+
+# API Keys
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 BLOGS_API_KEY = os.getenv("BLOGS_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# MongoDB Connection
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    print("WARNING: MONGO_URI not found in environment variables")
+    MONGO_URI = "mongodb://localhost:27017/studlyf"
+
+try:
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client.studlyf  # Database name
+    users_collection = db.users
+    connections_collection = db.connections
+    connection_requests_collection = db.connection_requests
+    messages_collection = db.messages
+    print("✅ Connected to MongoDB")
+except Exception as e:
+    print(f"❌ MongoDB connection error: {e}")
+    db = None
+
+# Firebase Admin Initialization
+FIREBASE_ADMIN_KEY = os.getenv("FIREBASE_SERVICE_ACCOUNT_BASE64")
+if FIREBASE_ADMIN_KEY:
+    try:
+        # Decode base64 Firebase admin key
+        firebase_key = json.loads(base64.b64decode(FIREBASE_ADMIN_KEY).decode('utf-8'))
+        cred = credentials.Certificate(firebase_key)
+        firebase_admin.initialize_app(cred)
+        print("✅ Firebase Admin initialized")
+    except Exception as e:
+        print(f"❌ Firebase Admin initialization error: {e}")
+else:
+    print("WARNING: FIREBASE_ADMIN_KEY not found in environment variables")
+
+# ===================== AUTHENTICATION MIDDLEWARE =====================
+def authenticate_user(f):
+    """Decorator to authenticate Firebase users"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            # Get the authorization header
+            auth_header = request.headers.get('Authorization')
+            if not auth_header or not auth_header.startswith('Bearer '):
+                return jsonify({'error': 'Missing or invalid authorization header'}), 401
+            
+            # Extract the token
+            token = auth_header.split('Bearer ')[1]
+            
+            # Verify the token with Firebase
+            decoded_token = auth.verify_id_token(token)
+            request.user_uid = decoded_token['uid']
+            request.user_email = decoded_token.get('email')
+            
+            return f(*args, **kwargs)
+        except Exception as e:
+            print(f"Authentication error: {e}")
+            return jsonify({'error': 'Invalid token'}), 401
+    
+    return decorated_function
+
+# ===================== USER MANAGEMENT ROUTES =====================
+
+@app.route('/api/user', methods=['POST'])
+@authenticate_user
+def create_or_update_user():
+    """Create or update user profile"""
+    try:
+        data = request.get_json()
+        uid = data.get('uid')
+        
+        # Ensure user can only create/update their own profile
+        if request.user_uid != uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        # Check if user exists
+        existing_user = users_collection.find_one({'uid': uid})
+        
+        if existing_user:
+            # Update existing user
+            users_collection.update_one(
+                {'uid': uid},
+                {'$set': {**data, 'updatedAt': datetime.utcnow()}}
+            )
+            updated_user = users_collection.find_one({'uid': uid})
+            # Convert ObjectId to string for JSON serialization
+            updated_user['_id'] = str(updated_user['_id'])
+            return jsonify(updated_user)
+        else:
+            # Create new user
+            user_data = {
+                'uid': uid,
+                'name': data.get('name'),
+                'email': data.get('email'),
+                'photoURL': data.get('photoURL'),
+                'firstName': '',
+                'lastName': '',
+                'bio': '',
+                'branch': '',
+                'year': '',
+                'college': '',
+                'city': '',
+                'phoneNumber': '',
+                'linkedinUrl': '',
+                'githubUrl': '',
+                'portfolioUrl': '',
+                'profilePicture': data.get('photoURL', ''),
+                'skills': [],
+                'interests': [],
+                'careerGoals': '',
+                'dateOfBirth': '',
+                'resumeFiles': [],
+                'projectFiles': [],
+                'certificationFiles': [],
+                'isOnline': True,
+                'completedProfile': False,
+                'createdAt': datetime.utcnow(),
+                'updatedAt': datetime.utcnow()
+            }
+            
+            # Set _id to uid for consistency
+            user_data['_id'] = uid
+            
+            users_collection.insert_one(user_data)
+            user_data['_id'] = str(user_data['_id'])
+            return jsonify(user_data), 201
+            
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/<uid>', methods=['GET'])
+@authenticate_user
+def get_user_profile(uid):
+    """Get user profile (protected - only own profile)"""
+    try:
+        # Ensure user can only access their own profile
+        if request.user_uid != uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        user = users_collection.find_one({'uid': uid})
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+        
+        # Convert ObjectId to string
+        user['_id'] = str(user['_id'])
+        return jsonify(user)
+        
+    except Exception as e:
+        print(f"Error getting user profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/<uid>/public', methods=['GET'])
+@authenticate_user
+def get_public_user_profile(uid):
+    """Get any user's public profile (read-only, requires authentication)"""
+    try:
+        user = users_collection.find_one({'uid': uid})
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+        
+        # Convert ObjectId to string
+        user['_id'] = str(user['_id'])
+        return jsonify(user)
+        
+    except Exception as e:
+        print(f"Error getting public user profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/<uid>', methods=['POST'])
+@authenticate_user
+def update_user_profile(uid):
+    """Update user profile (protected - only own profile)"""
+    try:
+        # Ensure user can only update their own profile
+        if request.user_uid != uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        data = request.get_json()
+        
+        # Check data size limit (100KB)
+        data_size = len(json.dumps(data).encode('utf-8'))
+        if data_size > 100 * 1024:
+            return jsonify({'error': 'Profile data exceeds 100KB limit'}), 400
+        
+        # Update user profile
+        data['uid'] = uid
+        data['_id'] = uid
+        data['updatedAt'] = datetime.utcnow()
+        
+        users_collection.update_one(
+            {'uid': uid},
+            {'$set': data},
+            upsert=True
+        )
+        
+        updated_user = users_collection.find_one({'uid': uid})
+        updated_user['_id'] = str(updated_user['_id'])
+        return jsonify(updated_user)
+        
+    except Exception as e:
+        print(f"Error updating user profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users', methods=['GET'])
+def get_all_users():
+    """Get all users (public - no authentication required)"""
+    try:
+        # Only return essential public fields
+        users = list(users_collection.find({}, {
+            '_id': 1,
+            'uid': 1,
+            'firstName': 1,
+            'lastName': 1,
+            'profilePicture': 1,
+            'bio': 1,
+            'skills': 1,
+            'interests': 1,
+            'college': 1,
+            'year': 1,
+            'branch': 1,
+            'city': 1,
+            'isOnline': 1
+        }))
+        
+        # Convert ObjectId to string for each user
+        for user in users:
+            user['_id'] = str(user['_id'])
+        
+        return jsonify(users)
+        
+    except Exception as e:
+        print(f"Error getting all users: {e}")
+        return jsonify({'error': 'Failed to fetch users'}), 500
+
+# ===================== CONNECTION MANAGEMENT ROUTES =====================
+
+@app.route('/api/connections/<uid>', methods=['GET'])
+@authenticate_user
+def get_user_connections(uid):
+    """Get all connections for a user (protected - only own connections)"""
+    try:
+        # Ensure user can only access their own connections
+        if request.user_uid != uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        connections = list(connections_collection.find({
+            '$or': [
+                {'fromUid': uid},
+                {'toUid': uid}
+            ]
+        }))
+        
+        # Convert ObjectId to string for each connection
+        for conn in connections:
+            conn['_id'] = str(conn['_id'])
+        
+        return jsonify(connections)
+        
+    except Exception as e:
+        print(f"Error getting user connections: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/connections/request', methods=['POST'])
+@authenticate_user
+def send_connection_request():
+    """Send connection request (protected)"""
+    try:
+        data = request.get_json()
+        from_uid = data.get('from')
+        to_uid = data.get('to')
+        
+        if not from_uid or not to_uid:
+            return jsonify({'error': 'Missing from or to'}), 400
+        
+        # Ensure user can only send requests from their own UID
+        if request.user_uid != from_uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        # Check if request already exists
+        existing_request = connection_requests_collection.find_one({
+            'from': from_uid,
+            'to': to_uid
+        })
+        if existing_request:
+            return jsonify({'error': 'Request already sent'}), 409
+        
+        # Check if already connected
+        existing_connection = connections_collection.find_one({
+            '$or': [
+                {'fromUid': from_uid, 'toUid': to_uid},
+                {'fromUid': to_uid, 'toUid': from_uid}
+            ]
+        })
+        if existing_connection:
+            return jsonify({'error': 'Already connected'}), 409
+        
+        # Create connection request with auto-expiry after 24 hours
+        request_data = {
+            'from': from_uid,
+            'to': to_uid,
+            'createdAt': datetime.utcnow()
+        }
+        
+        result = connection_requests_collection.insert_one(request_data)
+        request_data['_id'] = str(result.inserted_id)
+        
+        return jsonify(request_data), 201
+        
+    except Exception as e:
+        print(f"Error sending connection request: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/connections/accept', methods=['POST'])
+@authenticate_user
+def accept_connection_request():
+    """Accept connection request (protected)"""
+    try:
+        data = request.get_json()
+        from_uid = data.get('from')
+        to_uid = data.get('to')
+        
+        if not from_uid or not to_uid:
+            return jsonify({'error': 'Missing from or to'}), 400
+        
+        # Ensure user can only accept requests sent to them
+        if request.user_uid != to_uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        # Create connection
+        connection_data = {
+            'fromUid': from_uid,
+            'toUid': to_uid,
+            'createdAt': datetime.utcnow()
+        }
+        connections_collection.insert_one(connection_data)
+        
+        # Remove connection request
+        connection_requests_collection.delete_one({
+            'from': from_uid,
+            'to': to_uid
+        })
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        print(f"Error accepting connection request: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/connections/reject', methods=['POST'])
+@authenticate_user
+def reject_connection_request():
+    """Reject connection request (protected)"""
+    try:
+        data = request.get_json()
+        from_uid = data.get('from')
+        to_uid = data.get('to')
+        
+        if not from_uid or not to_uid:
+            return jsonify({'error': 'Missing from or to'}), 400
+        
+        # Ensure user can only reject requests sent to them
+        if request.user_uid != to_uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        # Remove connection request
+        connection_requests_collection.delete_one({
+            'from': from_uid,
+            'to': to_uid
+        })
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        print(f"Error rejecting connection request: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/connections/requests/<uid>', methods=['GET'])
+@authenticate_user
+def get_connection_requests(uid):
+    """Get connection requests for a user (protected - only own requests)"""
+    try:
+        # Ensure user can only view their own requests
+        if request.user_uid != uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        requests = list(connection_requests_collection.find({'to': uid}))
+        
+        # Convert ObjectId to string for each request
+        for req in requests:
+            req['_id'] = str(req['_id'])
+        
+        return jsonify(requests)
+        
+    except Exception as e:
+        print(f"Error getting connection requests: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===================== MESSAGING ROUTES =====================
+
+@app.route('/api/messages/send', methods=['POST'])
+@authenticate_user
+def send_message():
+    """Send a message (protected)"""
+    try:
+        data = request.get_json()
+        from_uid = data.get('from')
+        to_uid = data.get('to')
+        text = data.get('text')
+        
+        if not from_uid or not to_uid or not text:
+            return jsonify({'error': 'Missing from, to, or text'}), 400
+        
+        # Ensure user can only send messages from their own UID
+        if request.user_uid != from_uid:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        # Create message with auto-expiry after 24 hours
+        message_data = {
+            'from': from_uid,
+            'to': to_uid,
+            'text': text,
+            'createdAt': datetime.utcnow()
+        }
+        
+        result = messages_collection.insert_one(message_data)
+        message_data['_id'] = str(result.inserted_id)
+        
+        return jsonify(message_data), 201
+        
+    except Exception as e:
+        print(f"Error sending message: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/messages/<uid1>/<uid2>', methods=['GET'])
+@authenticate_user
+def get_messages(uid1, uid2):
+    """Get messages between two users (protected - only if user is involved)"""
+    try:
+        # Ensure user can only view messages they're involved in
+        if request.user_uid != uid1 and request.user_uid != uid2:
+            return jsonify({'error': 'Unauthorized access'}), 403
+        
+        messages = list(messages_collection.find({
+            '$or': [
+                {'from': uid1, 'to': uid2},
+                {'from': uid2, 'to': uid1}
+            ]
+        }).sort('createdAt', 1))
+        
+        # Convert ObjectId to string for each message
+        for msg in messages:
+            msg['_id'] = str(msg['_id'])
+        
+        return jsonify(messages)
+        
+    except Exception as e:
+        print(f"Error getting messages: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===================== HEALTH CHECK ROUTES =====================
+
+@app.route('/api', methods=['GET'])
+def api_health():
+    """API health check"""
+    return 'StudLyf Flask Backend API is running!'
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Detailed health check"""
+    try:
+        # Test MongoDB connection
+        db.command('ping')
+        mongo_status = 'Connected'
+    except:
+        mongo_status = 'Disconnected'
+    
+    return jsonify({
+        'status': 'OK',
+        'timestamp': datetime.utcnow().isoformat(),
+        'mongodb': mongo_status,
+        'cors': {
+            'allowedOrigins': ['http://localhost:8080', 'https://studlyf.in', 'https://www.studlyf.in']
+        }
+    })
+
+# ===================== BACKGROUND TASK FOR MESSAGE/REQUEST CLEANUP =====================
+
+def cleanup_expired_data():
+    """Clean up expired messages and connection requests"""
+    try:
+        # Remove messages older than 24 hours
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+        messages_collection.delete_many({'createdAt': {'$lt': cutoff_time}})
+        
+        # Remove connection requests older than 24 hours
+        connection_requests_collection.delete_many({'createdAt': {'$lt': cutoff_time}})
+        
+        print(f"[{datetime.utcnow()}] Cleaned up expired data")
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 
 # ----------------- COURSES, PROJECTS, CERTIFICATIONS SCRAPING ROUTES -----------------
 @app.route('/free-courses')
@@ -202,17 +709,58 @@ def refresh_shorts():
 # ----------------- SCHEDULER -----------------
 def schedule_jobs():
     scheduler = BackgroundScheduler()
+    
+    # Schedule news, blogs, and shorts fetching
     for hour in [0, 6, 12, 18]:
         scheduler.add_job(fetch_news, 'cron', hour=hour, minute=0)
     for hour in [0, 12]:
         scheduler.add_job(fetch_blogs, 'cron', hour=hour, minute=0)
         scheduler.add_job(fetch_shorts, 'cron', hour=hour, minute=0)
+    
+    # Schedule cleanup of expired data every hour
+    scheduler.add_job(cleanup_expired_data, 'cron', minute=0)
+    
     scheduler.start()
+
+# ===================== DATABASE INDEXES FOR PERFORMANCE =====================
+def create_indexes():
+    """Create database indexes for better performance"""
+    try:
+        # User collection indexes
+        users_collection.create_index('uid', unique=True)
+        users_collection.create_index('email')
+        
+        # Connection collection indexes
+        connections_collection.create_index([('fromUid', 1), ('toUid', 1)])
+        connections_collection.create_index('fromUid')
+        connections_collection.create_index('toUid')
+        
+        # Connection requests indexes
+        connection_requests_collection.create_index([('from', 1), ('to', 1)])
+        connection_requests_collection.create_index('to')
+        connection_requests_collection.create_index('createdAt', expireAfterSeconds=86400)  # 24 hours
+        
+        # Messages indexes
+        messages_collection.create_index([('from', 1), ('to', 1)])
+        messages_collection.create_index('createdAt', expireAfterSeconds=86400)  # 24 hours
+        
+        print("✅ Database indexes created")
+    except Exception as e:
+        print(f"❌ Error creating indexes: {e}")
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
+    # Initialize data fetching
     fetch_news()
     fetch_blogs()
     fetch_shorts()
+    
+    # Create database indexes
+    if db is not None:
+        create_indexes()
+    
+    # Start background scheduler
     schedule_jobs()
-    app.run(debug=True, port=5001)
+    
+    # Run the Flask app
+    app.run(debug=True, port=5001, host='0.0.0.0')
