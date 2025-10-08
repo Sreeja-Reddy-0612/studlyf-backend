@@ -53,12 +53,12 @@ try:
     
     # Test the connection
     mongo_client.admin.command('ping')
-    print("✅ Connected to MongoDB")
+    print("Connected to MongoDB")
 except Exception as e:
-    print(f"❌ MongoDB connection error: {e}")
+    print(f"MongoDB connection error: {e}")
     # Try alternative connection method for development
     try:
-        print("🔄 Trying alternative connection method...")
+        print("Trying alternative connection method...")
         mongo_client = MongoClient(
             MONGO_URI,
             tls=True,
@@ -78,9 +78,9 @@ except Exception as e:
         
         # Test the connection
         mongo_client.admin.command('ping')
-        print("✅ Connected to MongoDB (with relaxed SSL settings)")
+        print("Connected to MongoDB (with relaxed SSL settings)")
     except Exception as e2:
-        print(f"❌ Alternative MongoDB connection also failed: {e2}")
+        print(f"Alternative MongoDB connection also failed: {e2}")
         db = None
 
 # Firebase Admin Initialization
@@ -91,9 +91,9 @@ if FIREBASE_ADMIN_KEY:
         firebase_key = json.loads(base64.b64decode(FIREBASE_ADMIN_KEY).decode('utf-8'))
         cred = credentials.Certificate(firebase_key)
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase Admin initialized")
+        print("Firebase Admin initialized")
     except Exception as e:
-        print(f"❌ Firebase Admin initialization error: {e}")
+        print(f"Firebase Admin initialization error: {e}")
 else:
     print("WARNING: FIREBASE_ADMIN_KEY not found in environment variables")
 
@@ -783,9 +783,9 @@ def create_indexes():
         messages_collection.create_index([('from', 1), ('to', 1)])
         messages_collection.create_index('createdAt', expireAfterSeconds=86400)  # 24 hours
         
-        print("✅ Database indexes created")
+        print("Database indexes created")
     except Exception as e:
-        print(f"❌ Error creating indexes: {e}")
+        print(f"Error creating indexes: {e}")
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":

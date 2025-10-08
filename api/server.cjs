@@ -16,6 +16,8 @@ const app = express();
 const allowedOrigins = [
   'http://localhost:8080',
   'http://localhost:5173',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:5173',
   'https://studlyf.in',
   'https://www.studlyf.in',
 ];
@@ -27,7 +29,8 @@ app.use(cors({
     
     console.log('Request from origin:', origin);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    const localhostRegex = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+    if (allowedOrigins.indexOf(origin) !== -1 || localhostRegex.test(origin)) {
       console.log('Origin allowed:', origin);
       callback(null, true);
     } else {
@@ -59,7 +62,26 @@ const storage = multer.diskStorage({
     cb(null, name);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    // Accept common images and general files; basic sanity check
+    const allowed = [
+      'image/',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'application/zip',
+      'application/x-zip-compressed'
+    ];
+    if (file.mimetype.startsWith('image/') || allowed.includes(file.mimetype)) return cb(null, true);
+    cb(null, true); // allow others by default
+  }
+});
 // serve uploaded files
 app.use('/uploads', express.static(uploadDir));
 
@@ -368,6 +390,39 @@ app.post('/api/messages/send-image', authenticate, upload.single('image'), async
       if (io) {
         io.to(to).emit('message:new', { _id: String(msg._id), from, to, type: 'image', mediaUrl, mediaType: req.file.mimetype, read: false, createdAt: msg.createdAt });
         io.to(from).emit('message:sent', { _id: String(msg._id), from, to, type: 'image', mediaUrl, mediaType: req.file.mimetype, read: false, createdAt: msg.createdAt });
+      }
+    } catch (e) {}
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send a generic file message (protected)
+app.post('/api/messages/send-file', authenticate, upload.single('file'), async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'Missing from or to' });
+    if (req.user.uid !== from) return res.status(403).json({ error: 'Unauthorized access' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const base = `${req.protocol}://${req.get('host')}`;
+    const mediaUrl = `${base}/uploads/${req.file.filename}`;
+    const payload = {
+      from,
+      to,
+      type: 'file',
+      mediaUrl,
+      mediaType: req.file.mimetype,
+      fileName: req.file.originalname || req.file.filename,
+      fileSize: req.file.size,
+      read: false
+    };
+    const msg = await MessageModel.create(payload);
+    try {
+      if (io) {
+        const emitPayload = { _id: String(msg._id), ...payload, createdAt: msg.createdAt };
+        io.to(to).emit('message:new', emitPayload);
+        io.to(from).emit('message:sent', emitPayload);
       }
     } catch (e) {}
     res.json(msg);

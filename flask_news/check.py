@@ -33,16 +33,55 @@ if not MONGO_URI:
     MONGO_URI = "mongodb://localhost:27017/studlyf"
 
 try:
-    mongo_client = MongoClient(MONGO_URI)
+    # Configure MongoDB client with proper SSL settings for Atlas
+    mongo_client = MongoClient(
+        MONGO_URI,
+        tls=True,  # Enable TLS/SSL
+        tlsAllowInvalidCertificates=False,  # Keep certificate validation
+        tlsAllowInvalidHostnames=False,  # Keep hostname validation
+        serverSelectionTimeoutMS=20000,  # 20 second timeout
+        connectTimeoutMS=20000,  # 20 second connection timeout
+        socketTimeoutMS=20000,  # 20 second socket timeout
+        retryWrites=True,
+        w='majority'
+    )
     db = mongo_client.studlyf  # Database name
     users_collection = db.users
     connections_collection = db.connections
     connection_requests_collection = db.connection_requests
     messages_collection = db.messages
+    
+    # Test the connection
+    mongo_client.admin.command('ping')
     print("✅ Connected to MongoDB")
 except Exception as e:
     print(f"❌ MongoDB connection error: {e}")
-    db = None
+    # Try alternative connection method for development
+    try:
+        print("🔄 Trying alternative connection method...")
+        mongo_client = MongoClient(
+            MONGO_URI,
+            tls=True,
+            tlsAllowInvalidCertificates=True,  # Allow invalid certificates for development
+            tlsAllowInvalidHostnames=True,  # Allow invalid hostnames for development
+            serverSelectionTimeoutMS=20000,
+            connectTimeoutMS=20000,
+            socketTimeoutMS=20000,
+            retryWrites=True,
+            w='majority'
+        )
+        db = mongo_client.studlyf
+        users_collection = db.users
+        connections_collection = db.connections
+        connection_requests_collection = db.connection_requests
+        messages_collection = db.messages
+        
+        # Test the connection
+        mongo_client.admin.command('ping')
+        print("✅ Connected to MongoDB (with relaxed SSL settings)")
+    except Exception as e2:
+        print(f"❌ Alternative MongoDB connection also failed: {e2}")
+        db = None
 
 # Firebase Admin Initialization
 FIREBASE_ADMIN_KEY = os.getenv("FIREBASE_ADMIN_KEY")
