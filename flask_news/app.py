@@ -7,6 +7,9 @@ from pymongo import MongoClient
 import firebase_admin
 from firebase_admin import credentials, auth
 from functools import wraps
+from models import init_db
+from ai_tools_routes import ai_tools_api
+
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from func import (
@@ -786,6 +789,19 @@ def create_indexes():
         print("✅ Database indexes created")
     except Exception as e:
         print(f"❌ Error creating indexes: {e}")
+
+# @app.route('/api/ai-tools', methods=['GET'])
+# def list_tools():
+#     tools = get_all_tools()
+#     return jsonify(tools)
+
+# @app.route('/api/ai-tools', methods=['POST'])
+# def create_tool():
+#     data = request.json
+#     tool = add_tool_from_dict(data)
+#     return jsonify(tool.to_dict()), 201
+
+app.register_blueprint(ai_tools_api)
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":

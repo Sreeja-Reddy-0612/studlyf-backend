@@ -1,8 +1,13 @@
-Flask
+flask
 flask-cors
-requests
 apscheduler
+sqlalchemy
 python-dotenv
+playwright
+beautifulsoup4
+openai
+chromadb
+uvicorn
+requests
 pymongo
 firebase-admin
-
