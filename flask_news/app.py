@@ -1,6 +1,7 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 from flask_cors import CORS
 from dotenv import load_dotenv
+from functools import wraps
 import sqlite3, os, requests, json, base64
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient
@@ -9,6 +10,11 @@ from firebase_admin import credentials, auth
 from functools import wraps
 from models import init_db
 from ai_tools_routes import ai_tools_api
+from stud import (
+    get_me, login, logout,
+    get_categories, add_category, remove_category,
+    get_videos, add_video, delete_video,
+)
 
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,12 +23,19 @@ from func import (
     add_event, get_events,
     fetch_courses_from_url, URLS  # <-- Add these imports
 )
+import func
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:8080", "https://studlyf.in", "https://www.studlyf.in"])
+app.secret_key = "a968bac0ac08ac9e4f723563936fc8b01e37e1eaa2e1829b08be72f8e88ccaec"
+
+CORS(app, supports_credentials=True,origins=["http://localhost:8080", "https://studlyf.in", "https://www.studlyf.in"])
+
+
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True
 
 # API Keys
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
@@ -617,41 +630,116 @@ def projects():
         })
 
 # Events routes
-@app.route("/events", methods=["GET", "POST"])
-def events():
-    if request.method == "POST":
-        data = request.json
-        new_event = add_event(data)
-        return jsonify({
-            "id": new_event[0],
-            "title": new_event[1],
-            "description": new_event[2],
-            "type": new_event[3],
-            "location": new_event[4],
-            "event_date": new_event[5],
-            "time": new_event[6],
-            "attendees": new_event[7],
-            "registration_link": new_event[8],
-            "registration_end_date": new_event[9]
-        }), 201
-    else:
-        events = get_events()
-        return jsonify({
-            "events": [
-                {
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "type": e[3],
-                    "location": e[4],
-                    "event_date": e[5],
-                    "time": e[6],
-                    "attendees": e[7],
-                    "registration_link": e[8],
-                    "registration_end_date": e[9]
-                } for e in events
-            ]
-        })
+# @app.route("/events", methods=["GET", "POST"])
+# def events():
+#     if request.method == "POST":
+#         data = request.json
+#         new_event = add_event(data)
+#         return jsonify({
+#             "id": new_event[0],
+#             "title": new_event[1],
+#             "description": new_event[2],
+#             "type": new_event[3],
+#             "location": new_event[4],
+#             "event_date": new_event[5],
+#             "time": new_event[6],
+#             "attendees": new_event[7],
+#             "registration_link": new_event[8],
+#             "registration_end_date": new_event[9]
+#         }), 201
+#     else:
+#         events = get_events()
+#         return jsonify({
+#             "events": [
+#                 {
+#                     "id": e[0],
+#                     "title": e[1],
+#                     "description": e[2],
+#                     "type": e[3],
+#                     "location": e[4],
+#                     "event_date": e[5],
+#                     "time": e[6],
+#                     "attendees": e[7],
+#                     "registration_link": e[8],
+#                     "registration_end_date": e[9]
+#                 } for e in events
+#             ]
+#         })
+from youtube_course import youtubecourse_api
+app.register_blueprint(youtubecourse_api)
+
+
+def login_required_admin(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("username") or session.get("role") != "admin":
+            return jsonify({"error": "Unauthorized"}), 403
+        return f(*args, **kwargs)
+    return wrapper
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    user = func.get_user_by_username(username)
+    if user and func.verify_password(user[2], password):
+        session["username"] = username
+        session["role"] = user[3]
+        return jsonify({"message": "Login successful", "role": user[3]})
+    return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message": "Logged out"})
+
+@app.route("/events", methods=["POST"])
+@login_required_admin
+def create_event():
+    data = request.get_json()
+    new_event = func.add_event(data)
+    return jsonify({
+        "id": new_event[0],
+        "title": new_event[1],
+        "description": new_event[2],
+        "type": new_event[3],
+        "location": new_event[4],
+        "event_date": new_event[5],
+        "time": new_event[6],
+        "attendees": new_event[7],
+        "registration_link": new_event[8],
+        "registration_end_date": new_event[9]
+    }), 201
+
+@app.route("/events", methods=["GET"])
+def list_events():
+    events = func.get_events()
+    return jsonify({
+        "events": [
+            {
+                "id": e[0],
+                "title": e[1],
+                "description": e[2],
+                "type": e[3],
+                "location": e[4],
+                "event_date": e[5],
+                "time": e[6],
+                "attendees": e[7],
+                "registration_link": e[8],
+                "registration_end_date": e[9]
+            } for e in events
+        ]
+    })
+
+@app.route("/events/<int:event_id>", methods=["DELETE"])
+@login_required_admin
+def remove_event(event_id):
+    func.delete_event(event_id)
+    return jsonify({"message": "Event deleted"})
+
+# if __name__ == "__main__":
+#     app.run(debug=True)
 
 cached_news = []
 cached_blogs = []
@@ -800,6 +888,22 @@ def create_indexes():
 #     data = request.json
 #     tool = add_tool_from_dict(data)
 #     return jsonify(tool.to_dict()), 201
+
+# from flask import request, jsonify, session
+# from functools import wraps
+# import sqlite3
+
+
+
+app.route("/api/me")(get_me)
+app.route("/login", methods=["POST"])(login)
+app.route("/logout", methods=["POST"])(logout)
+app.route("/studverse/categories")(get_categories)
+app.route("/studverse/categories", methods=["POST"])(add_category)
+app.route("/studverse/categories/<category>", methods=["DELETE"])(remove_category)
+app.route("/studverse/videos/<category>")(get_videos)
+app.route("/studverse/videos/<category>", methods=["POST"])(add_video)
+app.route("/studverse/videos/<category>", methods=["DELETE"])(delete_video)
 
 app.register_blueprint(ai_tools_api)
 

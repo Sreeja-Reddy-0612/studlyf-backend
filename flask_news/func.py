@@ -68,6 +68,83 @@ def get_projects():
     conn.close()
     return projects
 
+# def add_event(data):
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+#     event_date = data.get("event_date") or data.get("date")
+#     registration_end_date = data.get("registration_end_date") or data.get("lastRegistrationDate")
+#     registration_link = data.get("registration_link") or data.get("registrationLink")
+#     c.execute("""
+#         INSERT INTO events (title, description, type, location, event_date, time, attendees, registration_link, registration_end_date)
+#         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+#     """, (
+#         data.get("title"),
+#         data.get("description"),
+#         data.get("type"),
+#         data.get("location"),
+#         event_date,
+#         data.get("time"),
+#         data.get("attendees", 0),
+#         registration_link,
+#         registration_end_date,
+#     ))
+#     conn.commit()
+#     new_id = c.lastrowid
+#     c.execute("SELECT * FROM events WHERE id=?", (new_id,))
+#     new_event = c.fetchone()
+#     conn.close()
+#     return new_event
+
+# def get_events():
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+#     c.execute("SELECT * FROM events ORDER BY id DESC")
+#     events = c.fetchall()
+#     conn.close()
+#     return events
+
+# app.secret_key = "a968bac0ac08ac9e4f723563936fc8b01e37e1eaa2e1829b08be72f8e88ccaec"  # Use a strong secret in production
+
+import sqlite3
+from werkzeug.security import generate_password_hash, check_password_hash
+# from flask_cors import CORS
+# CORS(app, supports_credentials=True)
+
+DB_FILE = "database.db"
+
+def create_tables():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+def create_user(username, password, role="user"):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    pw_hash = generate_password_hash(password)
+    c.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (username, pw_hash, role))
+    conn.commit()
+    conn.close()
+
+def get_user_by_username(username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username = ?", (username,))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+def verify_password(stored_password_hash, password):
+    return check_password_hash(stored_password_hash, password)
+
 def add_event(data):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -102,6 +179,13 @@ def get_events():
     events = c.fetchall()
     conn.close()
     return events
+
+def delete_event(event_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM events WHERE id = ?", (event_id,))
+    conn.commit()
+    conn.close()
 
 # Coursera scraping URLs
 URLS = {
