@@ -3,41 +3,135 @@ import sqlite3
 import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup  # <-- Add this import
+from bs4 import BeautifulSoup
+from werkzeug.security import generate_password_hash, check_password_hash
 
+# ==================== GLOBAL CONFIG ====================
 DB_FILE = "database.db"
-load_dotenv()  # Ensure .env file is loaded before keys fetched
+load_dotenv()  # Load .env file variables
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # Optional for fetch_shorts
 
-def fetch_shorts():
-    global cached_shorts
-    query = "AI OR technology OR software OR jobs OR cloud computing"
-    published_after = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat("T") + "Z"
-    params = {
-        "part": "snippet",
-        "q": query,
-        "type": "video",
-        "videoDuration": "short",
-        "order": "viewCount",
-        "maxResults": 15,
-        "publishedAfter": published_after,
-        "key": YOUTUBE_API_KEY
-    }
-    r = requests.get("https://www.googleapis.com/youtube/v3/search", params=params)
-    if r.status_code == 200:
-        items = r.json().get("items", [])
-        cached_shorts = [
-            {
-                "title": item["snippet"]["title"],
-                "thumbnail": item["snippet"]["thumbnails"]["medium"]["url"],
-                "video_url": f"https://www.youtube.com/watch?v={item['id']['videoId']}",
-                "published_at": item["snippet"]["publishedAt"]
-            }
-            for item in items
-        ]
-        print(f"[{datetime.now(timezone.utc)}] Fetched {len(cached_shorts)} YouTube shorts")
-    else:
-        print(f"YouTube fetch error: {r.status_code}, {r.text}")
+# ==================== DB SETUP ====================
+def create_tables():
+    """Ensure required tables exist."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            description TEXT,
+            type TEXT,
+            location TEXT,
+            event_date TEXT,
+            time TEXT,
+            attendees INTEGER DEFAULT 0,
+            registration_link TEXT,
+            registration_end_date TEXT,
+            image_url TEXT
+        );
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            description TEXT,
+            tech_stack TEXT,
+            roles TEXT,
+            duration TEXT,
+            last_date TEXT,
+            links TEXT
+        );
+    """)
+
+    conn.commit()
+    conn.close()
+
+# ==================== USER AUTH ====================
+def create_user(username, password, role="user"):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    pw_hash = generate_password_hash(password)
+    c.execute(
+        "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        (username, pw_hash, role),
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_by_username(username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username=?", (username,))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+def verify_password(stored_hash, plain_password):
+    return check_password_hash(stored_hash, plain_password)
+
+# ==================== EVENTS ====================
+def add_event(data):
+    """Add a new event entry."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("""
+        INSERT INTO events (
+            title, description, type, location,
+            event_date, time, attendees,
+            registration_link, registration_end_date, image_url
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        data.get("title"),
+        data.get("description"),
+        data.get("type"),
+        data.get("location"),
+        data.get("event_date"),
+        data.get("time"),
+        data.get("attendees", 0),
+        data.get("registration_link"),
+        data.get("registration_end_date"),
+        data.get("image_url"),
+    ))
+
+    conn.commit()
+    new_id = c.lastrowid
+    c.execute("SELECT * FROM events WHERE id=?", (new_id,))
+    new_event = c.fetchone()
+    conn.close()
+    return new_event
+
+def get_events():
+    """Return all events."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM events ORDER BY id DESC")
+    events = c.fetchall()
+    conn.close()
+    return events
+
+def delete_event(event_id):
+    """Delete an event."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM events WHERE id=?", (event_id,))
+    conn.commit()
+    conn.close()
+
+# ==================== PROJECTS ====================
 def add_project(data):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -68,126 +162,41 @@ def get_projects():
     conn.close()
     return projects
 
-# def add_event(data):
-#     conn = sqlite3.connect(DB_FILE)
-#     c = conn.cursor()
-#     event_date = data.get("event_date") or data.get("date")
-#     registration_end_date = data.get("registration_end_date") or data.get("lastRegistrationDate")
-#     registration_link = data.get("registration_link") or data.get("registrationLink")
-#     c.execute("""
-#         INSERT INTO events (title, description, type, location, event_date, time, attendees, registration_link, registration_end_date)
-#         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-#     """, (
-#         data.get("title"),
-#         data.get("description"),
-#         data.get("type"),
-#         data.get("location"),
-#         event_date,
-#         data.get("time"),
-#         data.get("attendees", 0),
-#         registration_link,
-#         registration_end_date,
-#     ))
-#     conn.commit()
-#     new_id = c.lastrowid
-#     c.execute("SELECT * FROM events WHERE id=?", (new_id,))
-#     new_event = c.fetchone()
-#     conn.close()
-#     return new_event
+# ==================== YOUTUBE SHORTS FETCH ====================
+def fetch_shorts():
+    """Fetch trending tech YouTube Shorts (optional)."""
+    global cached_shorts
+    query = "AI OR technology OR software OR jobs OR cloud computing"
+    published_after = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat("T") + "Z"
 
-# def get_events():
-#     conn = sqlite3.connect(DB_FILE)
-#     c = conn.cursor()
-#     c.execute("SELECT * FROM events ORDER BY id DESC")
-#     events = c.fetchall()
-#     conn.close()
-#     return events
+    params = {
+        "part": "snippet",
+        "q": query,
+        "type": "video",
+        "videoDuration": "short",
+        "order": "viewCount",
+        "maxResults": 15,
+        "publishedAfter": published_after,
+        "key": YOUTUBE_API_KEY
+    }
 
-# app.secret_key = "a968bac0ac08ac9e4f723563936fc8b01e37e1eaa2e1829b08be72f8e88ccaec"  # Use a strong secret in production
+    r = requests.get("https://www.googleapis.com/youtube/v3/search", params=params)
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        cached_shorts = [
+            {
+                "title": item["snippet"]["title"],
+                "thumbnail": item["snippet"]["thumbnails"]["medium"]["url"],
+                "video_url": f"https://www.youtube.com/watch?v={item['id']['videoId']}",
+                "published_at": item["snippet"]["publishedAt"]
+            }
+            for item in items
+        ]
+        print(f"[{datetime.now(timezone.utc)}] ✅ Fetched {len(cached_shorts)} YouTube shorts")
+    else:
+        print(f"❌ YouTube API Error: {r.status_code}, {r.text}")
 
-import sqlite3
-from werkzeug.security import generate_password_hash, check_password_hash
-# from flask_cors import CORS
-# CORS(app, supports_credentials=True)
-
-DB_FILE = "database.db"
-
-def create_tables():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL
-        );
-    """)
-    conn.commit()
-    conn.close()
-
-def create_user(username, password, role="user"):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    pw_hash = generate_password_hash(password)
-    c.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (username, pw_hash, role))
-    conn.commit()
-    conn.close()
-
-def get_user_by_username(username):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username = ?", (username,))
-    user = c.fetchone()
-    conn.close()
-    return user
-
-def verify_password(stored_password_hash, password):
-    return check_password_hash(stored_password_hash, password)
-
-def add_event(data):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    event_date = data.get("event_date") or data.get("date")
-    registration_end_date = data.get("registration_end_date") or data.get("lastRegistrationDate")
-    registration_link = data.get("registration_link") or data.get("registrationLink")
-    c.execute("""
-        INSERT INTO events (title, description, type, location, event_date, time, attendees, registration_link, registration_end_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data.get("title"),
-        data.get("description"),
-        data.get("type"),
-        data.get("location"),
-        event_date,
-        data.get("time"),
-        data.get("attendees", 0),
-        registration_link,
-        registration_end_date,
-    ))
-    conn.commit()
-    new_id = c.lastrowid
-    c.execute("SELECT * FROM events WHERE id=?", (new_id,))
-    new_event = c.fetchone()
-    conn.close()
-    return new_event
-
-def get_events():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT * FROM events ORDER BY id DESC")
-    events = c.fetchall()
-    conn.close()
-    return events
-
-def delete_event(event_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM events WHERE id = ?", (event_id,))
-    conn.commit()
-    conn.close()
-
-# Coursera scraping URLs
+# ==================== COURSERA SCRAPING ====================
 URLS = {
     "courses": "https://www.coursera.org/search?productTypeDescription=Courses&sortBy=BEST_MATCH",
     "projects": "https://www.coursera.org/search?productTypeDescription=Guided%20Projects&productTypeDescription=Projects&sortBy=BEST_MATCH",
@@ -195,6 +204,7 @@ URLS = {
 }
 
 def fetch_courses_from_url(url, provider_name):
+    """Scrape Coursera course data."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
@@ -207,6 +217,7 @@ def fetch_courses_from_url(url, provider_name):
 
     soup = BeautifulSoup(resp.text, "lxml")
     results = []
+
     cards = soup.find_all('div', class_="cds-ProductCard-content")
     for card in cards:
         title_div = card.find('div', class_="cds-ProductCard-header")

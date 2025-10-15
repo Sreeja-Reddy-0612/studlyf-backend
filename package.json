@@ -4,7 +4,7 @@
   "main": "api.js",
   "type": "commonjs",
   "scripts": {
-     "dev": "node api/server.cjs"
+    "dev": "node api/server.cjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -16,5 +16,18 @@
     "multer": "^1.4.5-lts.1",
     "socket.io": "^4.7.5",
     "serverless-http": "^3.2.0"
-  }
+  },
+  "description": "This is the backend for the Studlyf project, built with Express and MongoDB (Mongoose). It is ready for deployment on Vercel as a serverless function.",
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sreeja-Reddy-0612/studlyf-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Sreeja-Reddy-0612/studlyf-backend/issues"
+  },
+  "homepage": "https://github.com/Sreeja-Reddy-0612/studlyf-backend#readme"
 }

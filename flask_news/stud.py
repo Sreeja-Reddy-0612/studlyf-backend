@@ -46,7 +46,7 @@ def get_categories():
     conn.close()
     return jsonify({"categories": categories})
 
-@login_required_admin
+# @login_required_admin
 def add_category():
     data = request.get_json()
     name = data.get("name", "").strip()
@@ -62,7 +62,7 @@ def add_category():
     conn.close()
     return jsonify({"success": True, "name": name})
 
-@login_required_admin
+# @login_required_admin
 def remove_category(category):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -80,7 +80,7 @@ def get_videos(category):
     conn.close()
     return jsonify({"videos": videos})
 
-@login_required_admin
+# @login_required_admin
 def add_video(category):
     data = request.get_json()
     url = data.get("url")
@@ -93,7 +93,7 @@ def add_video(category):
     conn.close()
     return jsonify({"success": True})
 
-@login_required_admin
+# @login_required_admin
 def delete_video(category):
     data = request.get_json()
     url = data.get("url")

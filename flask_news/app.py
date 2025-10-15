@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, session
+from flask import Flask, jsonify, request, session , send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from functools import wraps
@@ -10,6 +10,9 @@ from firebase_admin import credentials, auth
 from functools import wraps
 from models import init_db
 from ai_tools_routes import ai_tools_api
+from werkzeug.utils import secure_filename
+import os
+
 from stud import (
     get_me, login, logout,
     get_categories, add_category, remove_category,
@@ -31,8 +34,11 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = "a968bac0ac08ac9e4f723563936fc8b01e37e1eaa2e1829b08be72f8e88ccaec"
 
-CORS(app, supports_credentials=True,origins=["http://localhost:8080", "https://studlyf.in", "https://www.studlyf.in"])
+CORS(app, supports_credentials=True,origins=["http://localhost:8080", "http://localhost:3000","https://studlyf.in", "https://www.studlyf.in"])
 
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
 
 app.config["SESSION_COOKIE_SAMESITE"] = "None"
 app.config["SESSION_COOKIE_SECURE"] = True
@@ -629,44 +635,34 @@ def projects():
             ]
         })
 
-# Events routes
-# @app.route("/events", methods=["GET", "POST"])
-# def events():
-#     if request.method == "POST":
-#         data = request.json
-#         new_event = add_event(data)
-#         return jsonify({
-#             "id": new_event[0],
-#             "title": new_event[1],
-#             "description": new_event[2],
-#             "type": new_event[3],
-#             "location": new_event[4],
-#             "event_date": new_event[5],
-#             "time": new_event[6],
-#             "attendees": new_event[7],
-#             "registration_link": new_event[8],
-#             "registration_end_date": new_event[9]
-#         }), 201
-#     else:
-#         events = get_events()
-#         return jsonify({
-#             "events": [
-#                 {
-#                     "id": e[0],
-#                     "title": e[1],
-#                     "description": e[2],
-#                     "type": e[3],
-#                     "location": e[4],
-#                     "event_date": e[5],
-#                     "time": e[6],
-#                     "attendees": e[7],
-#                     "registration_link": e[8],
-#                     "registration_end_date": e[9]
-#                 } for e in events
-#             ]
-#         })
+# Register blueprints
 from youtube_course import youtubecourse_api
 app.register_blueprint(youtubecourse_api)
+
+
+# from flask import Flask, request, jsonify, session, send_from_directory
+# from functools import wraps
+# from flask_cors import CORS
+# from werkzeug.utils import secure_filename
+# import os
+# import func
+
+# -------------------- Flask setup --------------------
+# app = Flask(__name__)
+# app.secret_key = "supersecretkeyforstudlyf"
+# CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+
+# UPLOAD_FOLDER = "uploads"
+# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+
+# app.config["SESSION_COOKIE_SAMESITE"] = "None"
+# app.config["SESSION_COOKIE_SECURE"] = True
+
+
+def allowed_file(filename):
+    """Check file extension"""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def login_required_admin(f):
@@ -675,8 +671,11 @@ def login_required_admin(f):
         if not session.get("username") or session.get("role") != "admin":
             return jsonify({"error": "Unauthorized"}), 403
         return f(*args, **kwargs)
+
     return wrapper
 
+
+# -------------------- Authentication --------------------
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -689,57 +688,107 @@ def login():
         return jsonify({"message": "Login successful", "role": user[3]})
     return jsonify({"error": "Invalid credentials"}), 401
 
+
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return jsonify({"message": "Logged out"})
 
+
+# -------------------- Event CRUD --------------------
 @app.route("/events", methods=["POST"])
-@login_required_admin
+# @app.route("/events", methods=["POST"])
 def create_event():
-    data = request.get_json()
-    new_event = func.add_event(data)
-    return jsonify({
-        "id": new_event[0],
-        "title": new_event[1],
-        "description": new_event[2],
-        "type": new_event[3],
-        "location": new_event[4],
-        "event_date": new_event[5],
-        "time": new_event[6],
-        "attendees": new_event[7],
-        "registration_link": new_event[8],
-        "registration_end_date": new_event[9]
-    }), 201
+    """Add new event with optional image (<500KB)."""
+    try:
+        image = request.files.get("image")
+        image_url = None
+
+        # Validate & save image
+        if image and allowed_file(image.filename):
+            image.seek(0, os.SEEK_END)
+            size = image.tell()
+            image.seek(0)
+            if size > 500 * 1024:
+                return jsonify({"error": "Image exceeds 500 KB limit"}), 400
+
+            filename = secure_filename(image.filename)
+            image.save(os.path.join(UPLOAD_FOLDER, filename))
+            image_url = f"/uploads/{filename}"
+
+        # Other form data
+        data = {k: request.form.get(k) for k in request.form.keys()}
+        data["image_url"] = image_url
+
+        new_event = func.add_event(data)
+
+        return jsonify({
+            "id": new_event[0],
+            "title": new_event[1],
+            "description": new_event[2],
+            "type": new_event[3],
+            "location": new_event[4],
+            "event_date": new_event[5],
+            "time": new_event[6],
+            "attendees": new_event[7],
+            "registration_link": new_event[8],
+            "registration_end_date": new_event[9],
+            "image_url": new_event[10],
+        }), 201
+    except Exception as e:
+        print("Error creating event:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+
 
 @app.route("/events", methods=["GET"])
 def list_events():
-    events = func.get_events()
-    return jsonify({
-        "events": [
-            {
-                "id": e[0],
-                "title": e[1],
-                "description": e[2],
-                "type": e[3],
-                "location": e[4],
-                "event_date": e[5],
-                "time": e[6],
-                "attendees": e[7],
-                "registration_link": e[8],
-                "registration_end_date": e[9]
-            } for e in events
-        ]
-    })
+    """List all events."""
+    try:
+        events = func.get_events()
+        return jsonify({
+            "events": [
+                {
+                    "id": e[0],
+                    "title": e[1],
+                    "description": e[2],
+                    "type": e[3],
+                    "location": e[4],
+                    "event_date": e[5],
+                    "time": e[6],
+                    "attendees": e[7],
+                    "registration_link": e[8],
+                    "registration_end_date": e[9],
+                    "image_url": e[10],
+                } for e in events
+            ]
+        })
+    except Exception as e:
+        print("Error listing events:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+
 
 @app.route("/events/<int:event_id>", methods=["DELETE"])
-@login_required_admin
 def remove_event(event_id):
-    func.delete_event(event_id)
-    return jsonify({"message": "Event deleted"})
+    """Delete an event by ID."""
+    try:
+        func.delete_event(event_id)
+        return jsonify({"message": "Event deleted"})
+    except Exception as e:
+        print("Error deleting event:", e)
+        return jsonify({"error": str(e)}), 500
 
-# if __name__ == "__main__":
-#     app.run(debug=True)
+
+# -------------------- Serve uploads --------------------
+@app.route("/uploads/<path:filename>")
+def serve_image(filename):
+    """Serve uploaded images."""
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+
 
 cached_news = []
 cached_blogs = []
@@ -921,5 +970,5 @@ if __name__ == "__main__":
     # Start background scheduler
     schedule_jobs()
     
-    # Run the Flask app
+    # Run the Flask appeven
     app.run(debug=True, port=5001, host='0.0.0.0')
