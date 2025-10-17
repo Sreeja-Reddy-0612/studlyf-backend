@@ -12,13 +12,6 @@ from models import init_db
 from ai_tools_routes import ai_tools_api
 from werkzeug.utils import secure_filename
 import os
-# from gemini_api.gemini_chat import gemini_bp
-# from gemini_api import init_app
-# from gemini_bp import gemini_bp
-# from gemini_chat import chat_with_gemini  # ensures route is loaded
-# from flask_news import gemini_bp  # Import blueprint
-# from flask_news import gemini_bp  # blueprint from __init__.py
-# from gemini_api import gemini_bp
 from gemini_api import gemini_bp
 
 
@@ -128,15 +121,6 @@ if FIREBASE_ADMIN_KEY:
 else:
     print("WARNING: FIREBASE_ADMIN_KEY not found in environment variables")
 
-# Register Gemini blueprint
-# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
-# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
-# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
-
-# @app.route("/")
-# def index():
-#     return jsonify({"message": "Flask backend is running!"})
-# app.register_blueprint(gemini_bp, url_prefix="/api")
 app.register_blueprint(gemini_bp, url_prefix="/api")
 
 @app.route("/")
@@ -663,27 +647,6 @@ def projects():
 from youtube_course import youtubecourse_api
 app.register_blueprint(youtubecourse_api)
 
-# from ads_api import ads_api  # import your ads blueprint
-# app.register_blueprint(ads_api)
-
-# from flask import Flask, request, jsonify, session, send_from_directory
-# from functools import wraps
-# from flask_cors import CORS
-# from werkzeug.utils import secure_filename
-# import os
-# import func
-
-# -------------------- Flask setup --------------------
-# app = Flask(__name__)
-# app.secret_key = "supersecretkeyforstudlyf"
-# CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
-
-# UPLOAD_FOLDER = "uploads"
-# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-# ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
-
-# app.config["SESSION_COOKIE_SAMESITE"] = "None"
-# app.config["SESSION_COOKIE_SECURE"] = True
 
 
 def allowed_file(filename):
@@ -953,20 +916,7 @@ def create_indexes():
     except Exception as e:
         print(f"❌ Error creating indexes: {e}")
 
-# @app.route('/api/ai-tools', methods=['GET'])
-# def list_tools():
-#     tools = get_all_tools()
-#     return jsonify(tools)
 
-# @app.route('/api/ai-tools', methods=['POST'])
-# def create_tool():
-#     data = request.json
-#     tool = add_tool_from_dict(data)
-#     return jsonify(tool.to_dict()), 201
-
-# from flask import request, jsonify, session
-# from functools import wraps
-# import sqlite3
 
 
 
