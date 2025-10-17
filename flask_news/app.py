@@ -12,6 +12,15 @@ from models import init_db
 from ai_tools_routes import ai_tools_api
 from werkzeug.utils import secure_filename
 import os
+# from gemini_api.gemini_chat import gemini_bp
+# from gemini_api import init_app
+# from gemini_bp import gemini_bp
+# from gemini_chat import chat_with_gemini  # ensures route is loaded
+# from flask_news import gemini_bp  # Import blueprint
+# from flask_news import gemini_bp  # blueprint from __init__.py
+# from gemini_api import gemini_bp
+from gemini_api import gemini_bp
+
 
 from stud import (
     get_me, login, logout,
@@ -118,6 +127,21 @@ if FIREBASE_ADMIN_KEY:
         print(f"❌ Firebase Admin initialization error: {e}")
 else:
     print("WARNING: FIREBASE_ADMIN_KEY not found in environment variables")
+
+# Register Gemini blueprint
+# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
+# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
+# app.register_blueprint(gemini_bp, url_prefix="/api/gemini")
+
+# @app.route("/")
+# def index():
+#     return jsonify({"message": "Flask backend is running!"})
+# app.register_blueprint(gemini_bp, url_prefix="/api")
+app.register_blueprint(gemini_bp, url_prefix="/api")
+
+@app.route("/")
+def index():
+    return jsonify({"message": "Flask backend is running!"})
 
 # ===================== AUTHENTICATION MIDDLEWARE =====================
 def authenticate_user(f):
@@ -639,6 +663,8 @@ def projects():
 from youtube_course import youtubecourse_api
 app.register_blueprint(youtubecourse_api)
 
+# from ads_api import ads_api  # import your ads blueprint
+# app.register_blueprint(ads_api)
 
 # from flask import Flask, request, jsonify, session, send_from_directory
 # from functools import wraps
@@ -955,7 +981,11 @@ app.route("/studverse/videos/<category>", methods=["POST"])(add_video)
 app.route("/studverse/videos/<category>", methods=["DELETE"])(delete_video)
 
 app.register_blueprint(ai_tools_api)
+from ads_api import get_ads, add_ad, delete_ad
 
+app.route("/ads")(get_ads)
+app.route("/ads", methods=["POST"])(add_ad)
+app.route("/ads/<int:ad_id>", methods=["DELETE"])(delete_ad)
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
     # Initialize data fetching
